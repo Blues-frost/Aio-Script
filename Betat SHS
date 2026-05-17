@@ -1,0 +1,547 @@
+game:GetService("StarterGui"):SetCore("SendNotification", {
+	Title = "Executor",
+	Text = "Waiting...",
+	Duration = 2
+})
+
+task.spawn(function()
+	local Services = {
+		RunService = game:GetService("RunService"),
+		UserInputService = game:GetService("UserInputService"),
+		Stats = game:GetService("Stats"),
+		CoreGui = game:GetService("CoreGui"),
+		StarterGui = game:GetService("StarterGui"),
+		TweenService = game:GetService("TweenService"),
+		HttpService = game:GetService("HttpService"),
+		GuiService = game:GetService("GuiService"),
+		LogService = game:GetService("LogService"),
+		Players = game:GetService("Players")
+	}
+
+	local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+	local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+	local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+	local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+	local Options = Library.Options
+	local Toggles = Library.Toggles
+
+	local FpsRefreshInterval = 1.0
+	local PingRefreshInterval = 0.4
+	local DiscordWebhookURL = ""
+	local ConfigFileName = "StatusGUI_AutoConfig.json"
+	local HasSentDisconnect = false
+	local IsAttemptingLeave = false
+	local IsAltF4 = false
+	
+	local CurrentFPSString = "Calculating..."
+	local CurrentPingString = "Calculating..."
+
+	local function FormatGMT8Time()
+		local currentUnix = os.time()
+		local gmt8Unix = currentUnix + (8 * 3600)
+		return os.date("!%I:%M:%S %p", gmt8Unix)
+	end
+
+	local function SendDiscordWebhook(eventReason, isTesting)
+		if DiscordWebhookURL == "" or not string.match(DiscordWebhookURL, "^https://") then return end
+		local requestFunc = syn and syn.request or http and http.request or request
+		if not requestFunc then return end
+		
+		if not isTesting then
+			HasSentDisconnect = true
+		end
+
+		local localPlayer = Services.Players.LocalPlayer
+		local accountName = localPlayer and ("@" .. localPlayer.Name) or "@UnknownUser"
+		local timeString = FormatGMT8Time()
+		local statusString = isTesting and "Testing" or "Not In Game"
+
+		local contentString = string.format(
+			"# Status Bot\nAccount name: %s\nTime: %s\nStatus: %s\nReason: %s",
+			accountName,
+			timeString,
+			statusString,
+			eventReason
+		)
+
+		pcall(function()
+			requestFunc({
+				Url = DiscordWebhookURL,
+				Method = "POST",
+				Headers = {["Content-Type"] = "application/json"},
+				Body = Services.HttpService:JSONEncode({
+					username = "Status Bot",
+					content = contentString
+				})
+			})
+		end)
+	end
+
+	local function SaveConfig()
+		if Library.Unloaded then return end
+		pcall(function()
+			local data = {
+				FpsInterval = FpsRefreshInterval,
+				PingInterval = PingRefreshInterval,
+				Webhook = DiscordWebhookURL
+			}
+			writefile(ConfigFileName, Services.HttpService:JSONEncode(data))
+		end)
+	end
+
+	local function LoadConfig()
+		pcall(function()
+			if isfile and isfile(ConfigFileName) then
+				local rawData = readfile(ConfigFileName)
+				local decoded = Services.HttpService:JSONDecode(rawData)
+				if decoded then
+					if decoded.FpsInterval then 
+						FpsRefreshInterval = decoded.FpsInterval 
+						if Options.FpsSlider then Options.FpsSlider:SetValue(FpsRefreshInterval) end
+					end
+					if decoded.PingInterval then 
+						PingRefreshInterval = decoded.PingInterval 
+						if Options.PingSlider then Options.PingSlider:SetValue(PingRefreshInterval) end
+					end
+					if decoded.Webhook then 
+						DiscordWebhookURL = decoded.Webhook 
+						if Options.WebhookInput then Options.WebhookInput:SetValue(DiscordWebhookURL) end
+					end
+				end
+			end
+		end)
+	end
+
+	local Window = Library:CreateWindow({
+		Title = "Status Hud",
+		Footer = "Beta Testing V1",
+		Icon = 10734950339, 
+		NotifySide = "Right",
+		ShowCustomCursor = true,
+	})
+
+	local Tabs = {
+		Data = Window:AddTab("Data", "database"),
+		Webhook = Window:AddTab("Webhook", "bell"),
+		["UI Settings"] = Window:AddTab("UI Settings", "settings") 
+	}
+
+	local DataGroup = Tabs.Data:AddLeftGroupbox("Live Statistics", "activity")
+	local SpeedGroup = Tabs.Data:AddRightGroupbox("Refresh Performance", "gauge")
+	local WebhookGroup = Tabs.Webhook:AddLeftGroupbox("Discord Webhook Config", "shield-alert")
+	local FeatureGroup = Tabs.Webhook:AddRightGroupbox("Toggle Webhook Trackers", "toggle-left")
+	local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu Settings", "sliders")
+
+	local PingLabel = DataGroup:AddLabel("Ping : Calculating...")
+	local FpsLabel = DataGroup:AddLabel("FPS : Calculating...")
+
+	SpeedGroup:AddSlider("PingSlider", {
+		Text = "Ping Refresh Speed",
+		Default = 0.4,
+		Min = 0.1,
+		Max = 5.0,
+		Rounding = 1,
+		Compact = false,
+		Callback = function(Value)
+			PingRefreshInterval = Value
+			SaveConfig()
+		end
+	})
+
+	SpeedGroup:AddSlider("FpsSlider", {
+		Text = "FPS Refresh Speed",
+		Default = 1.0,
+		Min = 0.1,
+		Max = 5.0,
+		Rounding = 1,
+		Compact = false,
+		Callback = function(Value)
+			FpsRefreshInterval = Value
+			SaveConfig()
+		end
+	})
+
+	WebhookGroup:AddInput("WebhookInput", {
+		Default = "",
+		Numeric = false,
+		Finished = true,
+		ClearTextOnFocus = false,
+		Text = "Webhook URL",
+		Placeholder = "Paste Discord Webhook...",
+		Callback = function(Value)
+			DiscordWebhookURL = Value
+			SaveConfig()
+			Library:Notify({ Title = "HUD Status", Description = "Webhook Configuration Saved!", Time = 2 })
+		end
+	})
+
+	WebhookGroup:AddButton({
+		Text = "Test Webhook Connection",
+		Func = function()
+			if DiscordWebhookURL ~= "" and string.match(DiscordWebhookURL, "^https://") then
+				SendDiscordWebhook("X", true)
+				Library:Notify({ Title = "HUD Status", Description = "Test payload dispatched!", Time = 2 })
+			else
+				Library:Notify({ Title = "HUD Status", Description = "Invalid Webhook URL syntax!", Time = 2 })
+			end
+		end,
+		DoubleClick = false
+	})
+
+	FeatureGroup:AddToggle("WebhookKickToggle", {
+		Text = "Track Kicks & Bans",
+		Default = true,
+		Tooltip = "Sends webhook notification if you are kicked or banned by a moderator/script."
+	})
+
+	FeatureGroup:AddToggle("WebhookLeaveToggle", {
+		Text = "Track Game Leaves",
+		Default = true,
+		Tooltip = "Sends webhook notification if you manually leave the server or use Alt+F4."
+	})
+
+	FeatureGroup:AddToggle("WebhookCrashToggle", {
+		Text = "Track Game Crashes",
+		Default = true,
+		Tooltip = "Sends webhook notification if your application experiences unexpected memory issues/crashes."
+	})
+
+	MenuGroup:AddToggle("KeybindMenuOpen", {
+		Default = Library.KeybindFrame.Visible,
+		Text = "Open Keybind Menu",
+		Callback = function(value) Library.KeybindFrame.Visible = value end
+	})
+
+	MenuGroup:AddDropdown("DPIDropdown", {
+		Values = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" },
+		Default = "100%",
+		Text = "DPI Scale",
+		Callback = function(Value)
+			Value = Value:gsub("%%", "")
+			local DPI = tonumber(Value)
+			Library:SetDPIScale(DPI)
+		end
+	})
+
+	MenuGroup:AddSlider("UICornerSlider", {
+		Text = "Corner Radius",
+		Default = Library.CornerRadius,
+		Min = 0,
+		Max = 20,
+		Rounding = 0,
+		Callback = function(value) Window:SetCornerRadius(value) end
+	})
+
+	MenuGroup:AddDivider()
+	
+	MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = "U", NoUI = false, Text = "Menu (toggle)" })
+	Library.ToggleKeybind = Options.MenuKeybind
+
+	MenuGroup:AddLabel("Unload script bind"):AddKeyPicker("UnloadKeybind", { 
+		Default = "P", 
+		NoUI = false, 
+		Text = "Unload script",
+		Callback = function()
+			Library:Unload()
+		end
+	})
+
+	local OldHudPingLabel = nil
+	local OldHudFpsLabel = nil
+	local OldHudGui = nil
+
+	DataGroup:AddToggle("SeparateHudToggle", {
+		Text = "Spawn Separate Status Hud",
+		Default = false,
+		Callback = function(State)
+			if State then
+				if Services.CoreGui:FindFirstChild("SeparateStatusHUD") then return end
+
+				OldHudGui = Instance.new("ScreenGui")
+				OldHudGui.Name = "SeparateStatusHUD"
+				OldHudGui.ResetOnSpawn = false
+				OldHudGui.IgnoreGuiInset = true
+				OldHudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+				OldHudGui.DisplayOrder = 2147483645
+				OldHudGui.Parent = Services.CoreGui
+
+				local MainFrame = Instance.new("Frame")
+				MainFrame.Name = "MainFrame"
+				MainFrame.Size = UDim2.new(0, 220, 0, 95)
+				MainFrame.Position = UDim2.new(0, 40, 0, 250)
+				MainFrame.BackgroundColor3 = Color3.fromRGB(12, 16, 24)
+				MainFrame.BackgroundTransparency = 0.15
+				MainFrame.BorderSizePixel = 0
+				MainFrame.Active = true
+				MainFrame.Parent = OldHudGui
+
+				local UICorner = Instance.new("UICorner")
+				UICorner.CornerRadius = UDim.new(0, 10)
+				UICorner.Parent = MainFrame
+
+				local UIStroke = Instance.new("UIStroke")
+				UIStroke.Thickness = 1.5
+				UIStroke.Color = Color3.fromRGB(0, 102, 204)
+				UIStroke.Parent = MainFrame
+
+				local TopBar = Instance.new("Frame")
+				TopBar.Size = UDim2.new(1, 0, 0, 30)
+				TopBar.BackgroundTransparency = 1
+				TopBar.Parent = MainFrame
+
+				local Title = Instance.new("TextLabel")
+				Title.Size = UDim2.new(1, -80, 1, 0)
+				Title.Position = UDim2.new(0, 70, 0, 0)
+				Title.BackgroundTransparency = 1
+				Title.Font = Enum.Font.GothamBold
+				Title.Text = "Status HUD"
+				Title.TextColor3 = Color3.fromRGB(240, 244, 255)
+				Title.TextSize = 12
+				Title.TextXAlignment = Enum.TextXAlignment.Right
+				Title.Parent = TopBar
+
+				local RedButton = Instance.new("TextButton")
+				RedButton.Size = UDim2.new(0, 10, 0, 10)
+				RedButton.Position = UDim2.new(0, 12, 0, 10)
+				RedButton.Text = ""
+				RedButton.BackgroundColor3 = Color3.fromRGB(255, 95, 86)
+				RedButton.BorderSizePixel = 0
+				RedButton.Parent = TopBar
+				
+				local RedCorner = Instance.new("UICorner")
+				RedCorner.CornerRadius = UDim.new(1, 0)
+				RedCorner.Parent = RedButton
+
+				RedButton.MouseButton1Click:Connect(function()
+					Toggles.SeparateHudToggle:SetValue(false)
+				end)
+
+				local YellowButton = Instance.new("TextButton")
+				YellowButton.Size = UDim2.new(0, 10, 0, 10)
+				YellowButton.Position = UDim2.new(0, 28, 0, 10)
+				YellowButton.Text = ""
+				YellowButton.BackgroundColor3 = Color3.fromRGB(255, 189, 46)
+				YellowButton.BorderSizePixel = 0
+				YellowButton.Parent = TopBar
+
+				local YellowCorner = Instance.new("UICorner")
+				YellowCorner.CornerRadius = UDim.new(1, 0)
+				YellowCorner.Parent = YellowButton
+
+				local GreenButton = Instance.new("TextButton")
+				GreenButton.Size = UDim2.new(0, 10, 0, 10)
+				GreenButton.Position = UDim2.new(0, 44, 0, 10)
+				GreenButton.Text = ""
+				GreenButton.BackgroundColor3 = Color3.fromRGB(39, 201, 63)
+				GreenButton.BorderSizePixel = 0
+				GreenButton.Parent = TopBar
+
+				local GreenCorner = Instance.new("UICorner")
+				GreenCorner.CornerRadius = UDim.new(1, 0)
+				GreenCorner.Parent = GreenButton
+
+				GreenButton.MouseButton1Click:Connect(function()
+					if OldHudFpsLabel and OldHudPingLabel then
+						OldHudFpsLabel.Text = "FPS : Refreshing..."
+						OldHudPingLabel.Text = "Ping : Refreshing..."
+					end
+				end)
+
+				OldHudPingLabel = Instance.new("TextLabel")
+				OldHudPingLabel.Position = UDim2.new(0, 16, 0, 35)
+				OldHudPingLabel.Size = UDim2.new(1, -32, 0, 22)
+				OldHudPingLabel.BackgroundTransparency = 1
+				OldHudPingLabel.Font = Enum.Font.GothamMedium
+				OldHudPingLabel.Text = "Ping : " .. CurrentPingString
+				OldHudPingLabel.TextColor3 = Color3.fromRGB(225, 235, 255)
+				OldHudPingLabel.TextSize = 13
+				OldHudPingLabel.TextXAlignment = Enum.TextXAlignment.Left
+				OldHudPingLabel.Parent = MainFrame
+
+				OldHudFpsLabel = Instance.new("TextLabel")
+				OldHudFpsLabel.Position = UDim2.new(0, 16, 0, 60)
+				OldHudFpsLabel.Size = UDim2.new(1, -32, 0, 22)
+				OldHudFpsLabel.BackgroundTransparency = 1
+				OldHudFpsLabel.Font = Enum.Font.GothamMedium
+				OldHudFpsLabel.Text = "FPS : " .. CurrentFPSString
+				OldHudFpsLabel.TextColor3 = Color3.fromRGB(225, 235, 255)
+				OldHudFpsLabel.TextSize = 13
+				OldHudFpsLabel.TextXAlignment = Enum.TextXAlignment.Left
+				OldHudFpsLabel.Parent = MainFrame
+
+				local Dragging, DragStart, StartPos
+				MainFrame.InputBegan:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 then
+						Dragging = true
+						DragStart = input.Position
+						StartPos = MainFrame.Position
+						input.Changed:Connect(function()
+							if input.UserInputState == Enum.UserInputState.End then Dragging = false end
+						end)
+					end
+				end)
+				Services.UserInputService.InputChanged:Connect(function(input)
+					if Dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+						local Delta = input.Position - DragStart
+						MainFrame.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + Delta.X, StartPos.Y.Scale, StartPos.Y.Offset + Delta.Y)
+					end
+				end)
+			else
+				if OldHudGui then
+					pcall(function() OldHudGui:Destroy() end)
+					OldHudGui = nil
+					OldHudPingLabel = nil
+					OldHudFpsLabel = nil
+				end
+			end
+		end
+	end)
+
+	ThemeManager:SetLibrary(Library)
+	SaveManager:SetLibrary(Library)
+	SaveManager:IgnoreThemeSettings()
+	SaveManager:SetIgnoreIndexes({ "MenuKeybind", "UnloadKeybind" })
+	ThemeManager:SetFolder("StatusHUDHub")
+	SaveManager:SetFolder("StatusHUDHub/Configs")
+	SaveManager:BuildConfigSection(Tabs["UI Settings"])
+	ThemeManager:ApplyToTab(Tabs["UI Settings"])
+
+	LoadConfig()
+	SaveManager:LoadAutoloadConfig()
+
+	task.spawn(function()
+		local Frames = 0
+		local Last = os.clock()
+		while not Library.Unloaded do
+			Services.RunService.RenderStepped:Wait()
+			Frames = Frames + 1
+			local RightNow = os.clock()
+			local Delta = RightNow - Last
+			
+			if Delta >= FpsRefreshInterval then
+				local CalculatedFps = Frames / Delta
+				CurrentFPSString = string.format("%.2f", CalculatedFps)
+				
+				if FpsLabel then FpsLabel:SetText("FPS : " .. CurrentFPSString) end
+				if OldHudFpsLabel and OldHudGui then OldHudFpsLabel.Text = "FPS : " .. CurrentFPSString end
+				
+				Frames = 0
+				Last = RightNow
+			end
+		end
+	end)
+
+	task.spawn(function()
+		while not Library.Unloaded do
+			local PingValue = 0.00
+			pcall(function()
+				local RawPing = Services.Stats.PerformanceStats.Ping:GetValue()
+				if RawPing and RawPing > 0 then PingValue = RawPing end
+			end)
+
+			CurrentPingString = string.format("%.2f ms", PingValue)
+			
+			if PingLabel then PingLabel:SetText("Ping : " .. CurrentPingString) end
+			if OldHudPingLabel and OldHudGui then OldHudPingLabel.Text = "Ping : " .. CurrentPingString end
+			
+			task.wait(PingRefreshInterval)
+		end
+	end)
+
+	Library:OnUnload(function()
+		if OldHudGui then pcall(function() OldHudGui:Destroy() end) end
+	end)
+
+	task.spawn(function()
+		Services.GuiService.ErrorMessageChanged:Connect(function(message, errorType)
+			if HasSentDisconnect then return end
+			
+			local msgLower = string.lower(message)
+			local isKick = string.find(msgLower, "kick") or string.find(msgLower, "ban")
+			
+			if isKick and not Toggles.WebhookKickToggle.Value then return end
+			if not isKick and not Toggles.WebhookLeaveToggle.Value then return end
+			
+			if IsAltF4 then SendDiscordWebhook("get forceclosed") return end
+			if IsAttemptingLeave then SendDiscordWebhook("leave game") return end
+			
+			if isKick then
+				SendDiscordWebhook("get kicked (" .. message .. ")")
+			else
+				SendDiscordWebhook("get disconnected (" .. message .. ")")
+			end
+		end)
+
+		Services.LogService.MessageOut:Connect(function(message, messageType)
+			if HasSentDisconnect or not Toggles.WebhookCrashToggle.Value then return end
+			if messageType == Enum.MessageType.MessageError then
+				local msgLower = string.lower(message)
+				if string.find(msgLower, "crash") or string.find(msgLower, "fatal") or string.find(msgLower, "out of memory") then
+					SendDiscordWebhook("get forceclosed")
+				end
+			end
+		end)
+
+		local function TrackNativeLeaveButton()
+			local robloxGui = Services.CoreGui:FindFirstChild("RobloxGui")
+			if robloxGui then
+				local gameMenu = robloxGui:FindFirstChild("GameMenu", true) or robloxGui:FindFirstChild("SettingsMenu", true) or robloxGui:FindFirstChild("InGameMenu", true)
+				if gameMenu then
+					local leaveBtn = gameMenu:FindFirstChild("LeaveGame", true) or gameMenu:FindFirstChild("LeaveButton", true) or gameMenu:FindFirstChild("LeaveGameButton", true)
+					if leaveBtn and leaveBtn:IsA("GuiButton") then
+						leaveBtn.MouseButton1Click:Connect(function()
+							if Toggles.WebhookLeaveToggle.Value then
+								IsAttemptingLeave = true
+								SendDiscordWebhook("leave game")
+							end
+						end)
+						return true
+					end
+				end
+			end
+			return false
+		end
+
+		while not Library.Unloaded and not IsAttemptingLeave do
+			if TrackNativeLeaveButton() then break end
+			task.wait(1)
+		end
+	end)
+
+	Services.UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if input.KeyCode == Enum.KeyCode.L or input.KeyCode == Enum.KeyCode.Return then
+			if Services.GuiService.MenuIsOpen and Toggles.WebhookLeaveToggle.Value then IsAttemptingLeave = true end
+		end
+		
+		local isAltDown = Services.UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or Services.UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)
+		if input.KeyCode == Enum.KeyCode.F4 and isAltDown and Toggles.WebhookLeaveToggle.Value then
+			IsAltF4 = true
+			SendDiscordWebhook("get forceclosed")
+		end
+	end)
+
+	game.AncestryChanged:Connect(function(_, parent)
+		if not parent and not HasSentDisconnect and Toggles.WebhookLeaveToggle.Value then
+			if IsAltF4 then SendDiscordWebhook("get forceclosed")
+			elseif IsAttemptingLeave then SendDiscordWebhook("leave game")
+			else SendDiscordWebhook("get disconnected") end
+		end
+	end)
+
+	game:BindToClose(function()
+		if not HasSentDisconnect and Toggles.WebhookLeaveToggle.Value then
+			if IsAltF4 then SendDiscordWebhook("get forceclosed")
+			else IsAttemptingLeave = true; SendDiscordWebhook("leave game") end
+			local timer = os.clock()
+			while os.clock() - timer < 0.8 do task.wait() end
+		end
+	end)
+end)
+
+game:GetService("StarterGui"):SetCore("SendNotification", {
+	Title = "Executor",
+	Text = "Executed",
+	Duration = 2
+})
