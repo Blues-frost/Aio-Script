@@ -12,7 +12,10 @@ task.spawn(function()
         CoreGui = game:GetService("CoreGui"),
         StarterGui = game:GetService("StarterGui"),
         TweenService = game:GetService("TweenService"),
-        HttpService = game:GetService("HttpService")
+        HttpService = game:GetService("HttpService"),
+        GuiService = game:GetService("GuiService"),
+        LogService = game:GetService("LogService"),
+        Players = game:GetService("Players")
     }
 
     local ToggleKey = Enum.KeyCode.U
@@ -23,7 +26,53 @@ task.spawn(function()
 
     local FpsRefreshInterval = 1.0
     local PingRefreshInterval = 0.4
+    local DiscordWebhookURL = ""
     local ConfigFileName = "StatusGUI_AutoConfig.json"
+    local HasSentDisconnect = false
+    local WebBox = nil
+    local IsAttemptingLeave = false
+    local IsAltF4 = false
+
+    local function FormatGMT8Time()
+        local currentUnix = os.time()
+        local gmt8Unix = currentUnix + (8 * 3600)
+        return os.date("!%I:%M:%S %p", gmt8Unix)
+    end
+
+    local function SendDiscordWebhook(eventReason, isTesting)
+        if DiscordWebhookURL == "" or not string.match(DiscordWebhookURL, "^https://") then return end
+        local requestFunc = syn and syn.request or http and http.request or request
+        if not requestFunc then return end
+        
+        if not isTesting then
+            HasSentDisconnect = true
+        end
+
+        local localPlayer = Services.Players.LocalPlayer
+        local accountName = localPlayer and ("@" .. localPlayer.Name) or "@UnknownUser"
+        local timeString = FormatGMT8Time()
+        local statusString = isTesting and "Testing" or "Not In Game"
+
+        local contentString = string.format(
+            "# Status Bot\nAccount name: %s\nTime: %s\nStatus: %s\nReason: %s",
+            accountName,
+            timeString,
+            statusString,
+            eventReason
+        )
+
+        pcall(function()
+            requestFunc({
+                Url = DiscordWebhookURL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = Services.HttpService:JSONEncode({
+                    username = "Status Bot",
+                    content = contentString
+                })
+            })
+        end)
+    end
 
     local function SaveConfig()
         if Destroyed then return end
@@ -31,7 +80,8 @@ task.spawn(function()
             pcall(function()
                 local data = {
                     FpsInterval = FpsRefreshInterval,
-                    PingInterval = PingRefreshInterval
+                    PingInterval = PingRefreshInterval,
+                    Webhook = DiscordWebhookURL
                 }
                 writefile(ConfigFileName, Services.HttpService:JSONEncode(data))
             end)
@@ -46,12 +96,16 @@ task.spawn(function()
                 if decoded then
                     if decoded.FpsInterval then FpsRefreshInterval = decoded.FpsInterval end
                     if decoded.PingInterval then PingRefreshInterval = decoded.PingInterval end
+                    if decoded.Webhook then 
+                        DiscordWebhookURL = decoded.Webhook 
+                        if WebBox then
+                            WebBox.Text = decoded.Webhook
+                        end
+                    end
                 end
             end
         end)
     end
-
-    LoadConfig()
 
     task.spawn(function()
         local OldGui = Services.CoreGui:FindFirstChild("StatusGUI")
@@ -263,12 +317,15 @@ task.spawn(function()
         Tab1Page.Parent = MainFrame
     end)
 
-    local Tab2Page = Instance.new("Frame")
+    local Tab2Page = Instance.new("ScrollingFrame")
     Tab2Page.Position = UDim2.new(0, 0, 0, 65)
     Tab2Page.Size = UDim2.new(1, 0, 1, -65)
     Tab2Page.BackgroundTransparency = 1
     Tab2Page.Visible = false
     Tab2Page.ZIndex = 3
+    Tab2Page.CanvasSize = UDim2.new(0, 0, 0, 205)
+    Tab2Page.ScrollBarThickness = 4
+    Tab2Page.ScrollBarImageColor3 = Color3.fromRGB(0, 136, 255)
 
     task.spawn(function()
         Tab2Page.Parent = MainFrame
@@ -400,6 +457,84 @@ task.spawn(function()
 
     task.spawn(function()
         FpsBar, FpsBtn, FpsFill = CreateSlider(Tab2Page, "FPS Refresh", 45, FpsRefreshInterval)
+    end)
+
+    task.spawn(function()
+        local BoxLabel = Instance.new("TextLabel")
+        BoxLabel.Parent = Tab2Page
+        BoxLabel.Position = UDim2.new(0, 16, 0, 85)
+        BoxLabel.Size = UDim2.new(1, -32, 0, 15)
+        BoxLabel.BackgroundTransparency = 1
+        BoxLabel.Font = Enum.Font.GothamSemibold
+        BoxLabel.Text = "Discord Status Webhook URL"
+        BoxLabel.TextColor3 = Color3.fromRGB(140, 155, 175)
+        BoxLabel.TextSize = 11
+        BoxLabel.TextXAlignment = Enum.TextXAlignment.Left
+        BoxLabel.ZIndex = 4
+
+        local InputFrame = Instance.new("Frame")
+        InputFrame.Parent = Tab2Page
+        InputFrame.Position = UDim2.new(0, 16, 0, 103)
+        InputFrame.Size = UDim2.new(1, -42, 0, 24)
+        InputFrame.BackgroundColor3 = Color3.fromRGB(20, 26, 38)
+        InputFrame.BorderSizePixel = 0
+        InputFrame.ZIndex = 4
+
+        local BoxCorner = Instance.new("UICorner")
+        BoxCorner.CornerRadius = UDim.new(0, 6)
+        BoxCorner.Parent = InputFrame
+
+        local BoxStroke = Instance.new("UIStroke")
+        BoxStroke.Thickness = 1
+        BoxStroke.Color = Color3.fromRGB(45, 55, 75)
+        BoxStroke.Parent = InputFrame
+
+        WebBox = Instance.new("TextBox")
+        WebBox.Parent = InputFrame
+        WebBox.Size = UDim2.new(1, -10, 1, 0)
+        WebBox.Position = UDim2.new(0, 5, 0, 0)
+        WebBox.BackgroundTransparency = 1
+        WebBox.Font = Enum.Font.Gotham
+        WebBox.Text = "Paste Discord Webhook..."
+        WebBox.TextColor3 = Color3.fromRGB(220, 230, 245)
+        WebBox.PlaceholderColor3 = Color3.fromRGB(75, 85, 105)
+        WebBox.TextSize = 10
+        WebBox.TextXAlignment = Enum.TextXAlignment.Left
+        WebBox.ClearTextOnFocus = false
+        WebBox.ZIndex = 5
+
+        WebBox.FocusLost:Connect(function(enterPressed)
+            DiscordWebhookURL = WebBox.Text
+            SaveConfig()
+            Notify("Webhook Saved!", 1.5)
+        end)
+
+        local TestBtn = Instance.new("TextButton")
+        TestBtn.Parent = Tab2Page
+        TestBtn.Position = UDim2.new(0, 16, 0, 134)
+        TestBtn.Size = UDim2.new(1, -42, 0, 22)
+        TestBtn.BackgroundColor3 = Color3.fromRGB(0, 102, 204)
+        TestBtn.Font = Enum.Font.GothamBold
+        TestBtn.Text = "Test Webhook"
+        TestBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        TestBtn.TextSize = 11
+        TestBtn.BorderSizePixel = 0
+        TestBtn.ZIndex = 4
+
+        local TestCorner = Instance.new("UICorner")
+        TestCorner.CornerRadius = UDim.new(0, 6)
+        TestCorner.Parent = TestBtn
+
+        TestBtn.MouseButton1Click:Connect(function()
+            if DiscordWebhookURL ~= "" and string.match(DiscordWebhookURL, "^https://") then
+                SendDiscordWebhook("X", true)
+                Notify("Test Sent!", 1.5)
+            else
+                Notify("Invalid Webhook!", 1.5)
+            end
+        end)
+
+        LoadConfig()
     end)
 
     local MiniButton = Instance.new("TextButton")
@@ -648,6 +783,119 @@ task.spawn(function()
                     CleanUp()
                 end
             end)
+        end)
+    end)
+
+    task.spawn(function()
+        Connections.DisconnectWatch = Services.GuiService.ErrorMessageChanged:Connect(function(message, errorType)
+            if HasSentDisconnect then return end
+            if IsAltF4 then
+                SendDiscordWebhook("get forceclosed")
+                return
+            end
+            if IsAttemptingLeave then 
+                SendDiscordWebhook("leave game")
+                return 
+            end
+            
+            local msgLower = string.lower(message)
+            if string.find(msgLower, "kick") or string.find(msgLower, "ban") then
+                SendDiscordWebhook("get kicked (" .. message .. ")")
+            else
+                SendDiscordWebhook("get disconnected (" .. message .. ")")
+            end
+        end)
+    end)
+
+    task.spawn(function()
+        Connections.CrashWatch = Services.LogService.MessageOut:Connect(function(message, messageType)
+            if HasSentDisconnect then return end
+            if messageType == Enum.MessageType.MessageError then
+                local msgLower = string.lower(message)
+                if string.find(msgLower, "crash") or string.find(msgLower, "fatal") or string.find(msgLower, "out of memory") then
+                    SendDiscordWebhook("get forceclosed")
+                end
+            end
+        end)
+    end)
+
+    task.spawn(function()
+        local function TrackNativeLeaveButton()
+            local robloxGui = Services.CoreGui:FindFirstChild("RobloxGui")
+            if robloxGui then
+                local gameMenu = robloxGui:FindFirstChild("GameMenu", true) or robloxGui:FindFirstChild("SettingsMenu", true) or robloxGui:FindFirstChild("InGameMenu", true)
+                if gameMenu then
+                    local leaveBtn = gameMenu:FindFirstChild("LeaveGame", true) or gameMenu:FindFirstChild("LeaveButton", true) or gameMenu:FindFirstChild("LeaveGameButton", true)
+                    if leaveBtn and leaveBtn:IsA("GuiButton") then
+                        Connections.NativeLeaveClick = leaveBtn.MouseButton1Click:Connect(function()
+                            IsAttemptingLeave = true
+                            SendDiscordWebhook("leave game")
+                        end)
+                        return true
+                    end
+                end
+            end
+            return false
+        end
+
+        if not TrackNativeLeaveButton() then
+            task.spawn(function()
+                while not Destroyed and not IsAttemptingLeave do
+                    if TrackNativeLeaveButton() then break end
+                    task.wait(1)
+                end
+            end)
+        end
+    end)
+
+    task.spawn(function()
+        Services.UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if input.KeyCode == Enum.KeyCode.L or input.KeyCode == Enum.KeyCode.Return then
+                if Services.GuiService.MenuIsOpen then
+                    IsAttemptingLeave = true
+                end
+            end
+        end)
+    end)
+
+    task.spawn(function()
+        Services.UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            local isAltDown = Services.UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or Services.UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)
+            if input.KeyCode == Enum.KeyCode.F4 and isAltDown then
+                IsAltF4 = true
+                SendDiscordWebhook("get forceclosed")
+            end
+        end)
+    end)
+
+    task.spawn(function()
+        game.AncestryChanged:Connect(function(_, parent)
+            if not parent and not HasSentDisconnect then
+                if IsAltF4 then
+                    SendDiscordWebhook("get forceclosed")
+                elseif IsAttemptingLeave then
+                    SendDiscordWebhook("leave game")
+                else
+                    SendDiscordWebhook("get disconnected")
+                end
+            end
+        end)
+    end)
+
+    task.spawn(function()
+        game:BindToClose(function()
+            if not HasSentDisconnect then
+                if IsAltF4 then
+                    SendDiscordWebhook("get forceclosed")
+                else
+                    IsAttemptingLeave = true
+                    SendDiscordWebhook("leave game")
+                end
+                local timer = os.clock()
+                while os.clock() - timer < 0.8 do
+                    task.wait()
+                end
+            end
         end)
     end)
 end)
