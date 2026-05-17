@@ -11,7 +11,8 @@ task.spawn(function()
         Stats = game:GetService("Stats"),
         CoreGui = game:GetService("CoreGui"),
         StarterGui = game:GetService("StarterGui"),
-        TweenService = game:GetService("TweenService")
+        TweenService = game:GetService("TweenService"),
+        HttpService = game:GetService("HttpService")
     }
 
     local ToggleKey = Enum.KeyCode.U
@@ -22,6 +23,35 @@ task.spawn(function()
 
     local FpsRefreshInterval = 1.0
     local PingRefreshInterval = 0.4
+    local ConfigFileName = "StatusGUI_AutoConfig.json"
+
+    local function SaveConfig()
+        if Destroyed then return end
+        task.spawn(function()
+            pcall(function()
+                local data = {
+                    FpsInterval = FpsRefreshInterval,
+                    PingInterval = PingRefreshInterval
+                }
+                writefile(ConfigFileName, Services.HttpService:JSONEncode(data))
+            end)
+        end)
+    end
+
+    local function LoadConfig()
+        pcall(function()
+            if isfile and isfile(ConfigFileName) then
+                local rawData = readfile(ConfigFileName)
+                local decoded = Services.HttpService:JSONDecode(rawData)
+                if decoded then
+                    if decoded.FpsInterval then FpsRefreshInterval = decoded.FpsInterval end
+                    if decoded.PingInterval then PingRefreshInterval = decoded.PingInterval end
+                end
+            end
+        end)
+    end
+
+    LoadConfig()
 
     task.spawn(function()
         local OldGui = Services.CoreGui:FindFirstChild("StatusGUI")
@@ -294,10 +324,12 @@ task.spawn(function()
         FPS.ZIndex = 4
     end)
 
-    local function CreateSlider(parent, labelText, yPosition)
+    local function CreateSlider(parent, labelText, yPosition, startValue)
         local SliderBar = Instance.new("Frame")
         local SliderButton = Instance.new("TextButton")
         local FillTrack = Instance.new("Frame")
+        
+        local initialPercentage = math.clamp((startValue - 0.1) / (5.0 - 0.1), 0, 1)
 
         task.spawn(function()
             local Label = Instance.new("TextLabel")
@@ -328,7 +360,7 @@ task.spawn(function()
 
         task.spawn(function()
             FillTrack.Parent = SliderBar
-            FillTrack.Size = UDim2.new(0.3, 0, 1, 0)
+            FillTrack.Size = UDim2.new(initialPercentage, 0, 1, 0)
             FillTrack.BackgroundColor3 = Color3.fromRGB(0, 136, 255) 
             FillTrack.BorderSizePixel = 0
             FillTrack.ZIndex = 5
@@ -340,7 +372,7 @@ task.spawn(function()
 
         task.spawn(function()
             SliderButton.Parent = SliderBar
-            SliderButton.Position = UDim2.new(0.3, -6, 0.5, -6)
+            SliderButton.Position = UDim2.new(initialPercentage, -6, 0.5, -6)
             SliderButton.Size = UDim2.new(0, 12, 0, 12)
             SliderButton.BackgroundColor3 = Color3.fromRGB(0, 185, 255) 
             SliderButton.Text = ""
@@ -363,11 +395,11 @@ task.spawn(function()
     local FpsBar, FpsBtn, FpsFill
 
     task.spawn(function()
-        PingBar, PingBtn, PingFill = CreateSlider(Tab2Page, "Ping Refresh", 5)
+        PingBar, PingBtn, PingFill = CreateSlider(Tab2Page, "Ping Refresh", 5, PingRefreshInterval)
     end)
 
     task.spawn(function()
-        FpsBar, FpsBtn, FpsFill = CreateSlider(Tab2Page, "FPS Refresh", 45)
+        FpsBar, FpsBtn, FpsFill = CreateSlider(Tab2Page, "FPS Refresh", 45, FpsRefreshInterval)
     end)
 
     local MiniButton = Instance.new("TextButton")
@@ -426,6 +458,7 @@ task.spawn(function()
 
             local CalculatedValue = minVal + (Percentage * (maxVal - minVal))
             callback(CalculatedValue)
+            SaveConfig()
         end
 
         Connections[sliderName .. "Began"] = SliderButton.InputBegan:Connect(function(input)
